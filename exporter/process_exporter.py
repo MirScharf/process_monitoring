@@ -4,7 +4,6 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 from prometheus_client import Gauge, start_http_server
 
@@ -15,6 +14,7 @@ EXPORTER_PORT = int(os.getenv("EXPORTER_PORT", "8000"))
 PROCESS_PID_ENV = os.getenv("PROCESS_PID", "").strip()
 PROCESS_NAME_ENV = os.getenv("PROCESS_NAME", "").strip()
 PROCESS_PATTERN_ENV = os.getenv("PROCESS_PATTERN", "").strip()
+PROCESS_SYSTEMD_SERVICE_ENV = os.getenv("PROCESS_SYSTEMD_SERVICE", "").strip()
 INTERACTIVE_SELECT = os.getenv("INTERACTIVE_SELECT", "true").strip().lower() in {"1", "true", "yes", "on"}
 SCRAPE_INTERVAL = float(os.getenv("SCRAPE_INTERVAL", "1.0"))
 
@@ -125,6 +125,24 @@ def choose_by_pattern(pattern: str) -> ProcessTarget:
     return matches[0]
 
 
+def process_in_service(pid: int, service_name: str) -> bool:
+    try:
+        cgroup = read_text(proc_path(str(pid), "cgroup"))
+    except (FileNotFoundError, PermissionError):
+        return False
+    return service_name in cgroup
+
+
+def choose_by_systemd_service(service_name: str) -> ProcessTarget:
+    matches = [p for p in list_processes() if process_in_service(p.pid, service_name)]
+    if not matches:
+        raise ProcessNotFound(f"No process found in systemd service '{service_name}'")
+
+    # Pick the oldest PID in this service, which is commonly the MainPID.
+    matches.sort(key=lambda p: p.pid)
+    return matches[0]
+
+
 def choose_interactive() -> ProcessTarget:
     print("=== Process Exporter Interactive Selection ===")
     print("Waehle Modus: [1] PID [2] Exakter Name [3] Muster (fnmatch, z.B. python*)")
@@ -144,6 +162,8 @@ def choose_interactive() -> ProcessTarget:
 def select_target() -> ProcessTarget:
     if PROCESS_PID_ENV:
         return choose_by_pid(PROCESS_PID_ENV)
+    if PROCESS_SYSTEMD_SERVICE_ENV:
+        return choose_by_systemd_service(PROCESS_SYSTEMD_SERVICE_ENV)
     if PROCESS_NAME_ENV:
         return choose_by_name(PROCESS_NAME_ENV)
     if PROCESS_PATTERN_ENV:
@@ -151,7 +171,7 @@ def select_target() -> ProcessTarget:
     if INTERACTIVE_SELECT and sys.stdin.isatty():
         return choose_interactive()
     raise ProcessNotFound(
-        "Kein Zielprozess konfiguriert. Setze PROCESS_PID/PROCESS_NAME/PROCESS_PATTERN oder starte interaktiv mit -it."
+        "Kein Zielprozess konfiguriert. Setze PROCESS_PID/PROCESS_SYSTEMD_SERVICE/PROCESS_NAME/PROCESS_PATTERN oder starte interaktiv mit -it."
     )
 
 

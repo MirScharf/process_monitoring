@@ -133,6 +133,7 @@ Dashboard `Observed Process Overview` wird automatisch provisioniert.
 Setze in `docker-compose.yml` eine der folgenden Variablen im `process-exporter` Service:
 
 - `PROCESS_PID=1234`
+- `PROCESS_SYSTEMD_SERVICE=my-app.service`
 - `PROCESS_NAME=python3`
 - `PROCESS_PATTERN=python*`
 
@@ -143,9 +144,15 @@ Beispiel:
 ```yaml
 environment:
   - PROC_ROOT=/host_proc
+  - PROCESS_SYSTEMD_SERVICE=my-app.service
   - PROCESS_NAME=python3
   - INTERACTIVE_SELECT=false
 ```
+
+Hinweis zu systemd-Services:
+
+- Wenn mehrere Prozesse denselben Namen tragen, ist `PROCESS_SYSTEMD_SERVICE` die robusteste Auswahl.
+- Der Exporter filtert dann ueber `/proc/<pid>/cgroup` auf den Service-Namen (z. B. `my-app.service`).
 
 ## Demo-Prozess starten
 
