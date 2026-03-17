@@ -20,12 +20,21 @@ SCRAPE_INTERVAL = float(os.getenv("SCRAPE_INTERVAL", "1.0"))
 
 
 CPU_PERCENT = Gauge("observed_process_cpu_percent", "CPU usage percent of observed process")
+CPU_USER_PERCENT = Gauge("observed_process_cpu_user_percent", "User CPU usage percent of observed process")
+CPU_SYSTEM_PERCENT = Gauge("observed_process_cpu_system_percent", "System CPU usage percent of observed process")
 RSS_BYTES = Gauge("observed_process_rss_bytes", "Resident memory bytes of observed process")
 VSZ_BYTES = Gauge("observed_process_vsz_bytes", "Virtual memory bytes of observed process")
 THREADS = Gauge("observed_process_threads", "Thread count of observed process")
 UPTIME_SECONDS = Gauge("observed_process_uptime_seconds", "Uptime of observed process in seconds")
 READ_BYTES = Gauge("observed_process_read_bytes_total", "Total bytes the process caused to be read from storage")
 WRITE_BYTES = Gauge("observed_process_write_bytes_total", "Total bytes the process caused to be written to storage")
+READ_SYSCALLS = Gauge("observed_process_read_syscalls_total", "Total read syscalls made by observed process")
+WRITE_SYSCALLS = Gauge("observed_process_write_syscalls_total", "Total write syscalls made by observed process")
+MINOR_FAULTS = Gauge("observed_process_minor_faults_total", "Minor page faults of observed process")
+MAJOR_FAULTS = Gauge("observed_process_major_faults_total", "Major page faults of observed process")
+OPEN_FDS = Gauge("observed_process_open_fds", "Open file descriptors of observed process")
+VOLUNTARY_CTX_SWITCHES = Gauge("observed_process_voluntary_context_switches_total", "Voluntary context switches of observed process")
+NONVOLUNTARY_CTX_SWITCHES = Gauge("observed_process_nonvoluntary_context_switches_total", "Nonvoluntary context switches of observed process")
 PROCESS_UP = Gauge("observed_process_up", "1 if observed process exists, else 0")
 PROCESS_PID_GAUGE = Gauge("observed_process_pid", "PID of observed process")
 
@@ -59,6 +68,8 @@ def parse_stat(pid: int) -> dict:
     # 1 state, 12 utime, 13 stime, 20 num_threads, 22 starttime, 23 vsize, 24 rss
     utime = float(after[11])
     stime = float(after[12])
+    minflt = float(after[7])
+    majflt = float(after[9])
     num_threads = int(after[17])
     starttime_ticks = float(after[19])
     vsize = float(after[20])
@@ -67,6 +78,8 @@ def parse_stat(pid: int) -> dict:
     return {
         "utime": utime,
         "stime": stime,
+        "minflt": minflt,
+        "majflt": majflt,
         "num_threads": num_threads,
         "starttime_ticks": starttime_ticks,
         "vsize": vsize,
@@ -74,18 +87,45 @@ def parse_stat(pid: int) -> dict:
     }
 
 
-def parse_io(pid: int) -> tuple[float, float]:
+def parse_io(pid: int) -> tuple[float, float, float, float]:
     read_bytes = 0.0
     write_bytes = 0.0
+    syscr = 0.0
+    syscw = 0.0
     try:
         for line in read_text(proc_path(str(pid), "io")).splitlines():
             if line.startswith("read_bytes:"):
                 read_bytes = float(line.split(":", 1)[1].strip())
             elif line.startswith("write_bytes:"):
                 write_bytes = float(line.split(":", 1)[1].strip())
+            elif line.startswith("syscr:"):
+                syscr = float(line.split(":", 1)[1].strip())
+            elif line.startswith("syscw:"):
+                syscw = float(line.split(":", 1)[1].strip())
     except (FileNotFoundError, PermissionError):
         pass
-    return read_bytes, write_bytes
+    return read_bytes, write_bytes, syscr, syscw
+
+
+def parse_status_context_switches(pid: int) -> tuple[float, float]:
+    voluntary = 0.0
+    nonvoluntary = 0.0
+    try:
+        for line in read_text(proc_path(str(pid), "status")).splitlines():
+            if line.startswith("voluntary_ctxt_switches:"):
+                voluntary = float(line.split(":", 1)[1].strip())
+            elif line.startswith("nonvoluntary_ctxt_switches:"):
+                nonvoluntary = float(line.split(":", 1)[1].strip())
+    except (FileNotFoundError, PermissionError):
+        pass
+    return voluntary, nonvoluntary
+
+
+def count_open_fds(pid: int) -> float:
+    try:
+        return float(len(os.listdir(proc_path(str(pid), "fd"))))
+    except (FileNotFoundError, PermissionError):
+        return 0.0
 
 
 def list_processes() -> list[ProcessTarget]:
@@ -181,12 +221,21 @@ def get_system_uptime() -> float:
 
 def reset_down_metrics() -> None:
     CPU_PERCENT.set(0)
+    CPU_USER_PERCENT.set(0)
+    CPU_SYSTEM_PERCENT.set(0)
     RSS_BYTES.set(0)
     VSZ_BYTES.set(0)
     THREADS.set(0)
     UPTIME_SECONDS.set(0)
     READ_BYTES.set(0)
     WRITE_BYTES.set(0)
+    READ_SYSCALLS.set(0)
+    WRITE_SYSCALLS.set(0)
+    MINOR_FAULTS.set(0)
+    MAJOR_FAULTS.set(0)
+    OPEN_FDS.set(0)
+    VOLUNTARY_CTX_SWITCHES.set(0)
+    NONVOLUNTARY_CTX_SWITCHES.set(0)
     PROCESS_UP.set(0)
 
 
@@ -195,6 +244,8 @@ def monitor(target: ProcessTarget) -> None:
     PROCESS_PID_GAUGE.set(target.pid)
 
     prev_cpu_total = None
+    prev_utime = None
+    prev_stime = None
     prev_wall = None
 
     while True:
@@ -204,26 +255,46 @@ def monitor(target: ProcessTarget) -> None:
             cpu_total = stat["utime"] + stat["stime"]
 
             cpu_percent = 0.0
+            cpu_user_percent = 0.0
+            cpu_system_percent = 0.0
             if prev_cpu_total is not None and prev_wall is not None:
                 cpu_delta = cpu_total - prev_cpu_total
                 wall_delta = now - prev_wall
                 if wall_delta > 0:
                     cpu_percent = (cpu_delta / CLK_TCK) / wall_delta * 100.0
+                    if prev_utime is not None and prev_stime is not None:
+                        user_delta = stat["utime"] - prev_utime
+                        system_delta = stat["stime"] - prev_stime
+                        cpu_user_percent = (user_delta / CLK_TCK) / wall_delta * 100.0
+                        cpu_system_percent = (system_delta / CLK_TCK) / wall_delta * 100.0
 
             prev_cpu_total = cpu_total
+            prev_utime = stat["utime"]
+            prev_stime = stat["stime"]
             prev_wall = now
 
             system_uptime = get_system_uptime()
             proc_uptime = max(system_uptime - (stat["starttime_ticks"] / CLK_TCK), 0.0)
-            read_bytes, write_bytes = parse_io(target.pid)
+            read_bytes, write_bytes, syscr, syscw = parse_io(target.pid)
+            voluntary_ctx, nonvoluntary_ctx = parse_status_context_switches(target.pid)
+            open_fds = count_open_fds(target.pid)
 
             CPU_PERCENT.set(cpu_percent)
+            CPU_USER_PERCENT.set(cpu_user_percent)
+            CPU_SYSTEM_PERCENT.set(cpu_system_percent)
             RSS_BYTES.set(stat["rss_bytes"])
             VSZ_BYTES.set(stat["vsize"])
             THREADS.set(stat["num_threads"])
             UPTIME_SECONDS.set(proc_uptime)
             READ_BYTES.set(read_bytes)
             WRITE_BYTES.set(write_bytes)
+            READ_SYSCALLS.set(syscr)
+            WRITE_SYSCALLS.set(syscw)
+            MINOR_FAULTS.set(stat["minflt"])
+            MAJOR_FAULTS.set(stat["majflt"])
+            OPEN_FDS.set(open_fds)
+            VOLUNTARY_CTX_SWITCHES.set(voluntary_ctx)
+            NONVOLUNTARY_CTX_SWITCHES.set(nonvoluntary_ctx)
             PROCESS_UP.set(1)
         except FileNotFoundError:
             print(f"Prozess pid={target.pid} wurde beendet.")

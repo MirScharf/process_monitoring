@@ -267,12 +267,21 @@ Im Browser:
 - `observed_process_up`
 - `observed_process_pid`
 - `observed_process_cpu_percent`
+- `observed_process_cpu_user_percent`
+- `observed_process_cpu_system_percent`
 - `observed_process_rss_bytes`
 - `observed_process_vsz_bytes`
 - `observed_process_threads`
 - `observed_process_uptime_seconds`
 - `observed_process_read_bytes_total`
 - `observed_process_write_bytes_total`
+- `observed_process_read_syscalls_total`
+- `observed_process_write_syscalls_total`
+- `observed_process_minor_faults_total`
+- `observed_process_major_faults_total`
+- `observed_process_open_fds`
+- `observed_process_voluntary_context_switches_total`
+- `observed_process_nonvoluntary_context_switches_total`
 
 ## Stoppen und Aufraeumen
 
