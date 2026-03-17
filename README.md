@@ -15,11 +15,14 @@ Der Stack besteht aus drei Containern:
 - `process-exporter` (eigene Python-App): liest Prozessdaten aus `/proc` und stellt Prometheus-Metriken bereit.
 - `prometheus`: sammelt Metriken vom Exporter.
 - `grafana`: zeigt die Metriken als Dashboard im Browser.
+- `node-exporter`: liefert Host-Systemmetriken (CPU, RAM, Disk, Netzwerk, Temperatur wenn verfuegbar).
 
 Datenfluss:
 
 - Exporter stellt Metriken auf `:8000/metrics` bereit.
+- Node Exporter stellt Metriken auf `:9100/metrics` bereit.
 - Prometheus scraped `process-exporter:8000`.
+- Prometheus scraped zusaetzlich `node-exporter:9100`.
 - Grafana liest aus Prometheus (`http://prometheus:9090`).
 
 ## Projektstruktur
@@ -37,6 +40,7 @@ Datenfluss:
 ├── grafana/
 │   ├── dashboards/
 │   │   └── process-observer.json
+│   │   └── system-overview.json
 │   └── provisioning/
 │       ├── dashboards/
 │       │   └── dashboards.yml
@@ -120,6 +124,7 @@ Wichtig:
 - Grafana: http://localhost:3000
 - Prometheus: http://localhost:9090
 - Exporter Metrics: http://localhost:8000/metrics
+- Node Exporter Metrics: http://localhost:9100/metrics
 
 Grafana Login:
 
@@ -127,6 +132,24 @@ Grafana Login:
 - Passwort: `admin`
 
 Dashboard `Observed Process Overview` wird automatisch provisioniert.
+Zusatz-Dashboard `System Overview` wird ebenfalls automatisch provisioniert.
+
+## Neuer Grafana-Reiter: System Overview
+
+Im Dashboard `System Overview` siehst du Host-Metriken:
+
+- CPU-Auslastung (gesamt)
+- RAM-Auslastung
+- System Uptime und Load
+- Disk I/O Durchsatz
+- Netzwerk Throughput
+- Filesystem-Auslastung
+- Temperatur (`node_thermal_zone_temp`), wenn auf dem Host verfuegbar
+
+Hinweis zur Temperatur auf Jetson:
+
+- Je nach JetPack/Kernel koennen Temperaturmetriken unterschiedlich benannt sein oder fehlen.
+- Falls kein Temperatur-Graph erscheint, laufen die anderen Systemmetriken trotzdem normal.
 
 ## Nicht-interaktiv starten (empfohlen fuer Automatisierung)
 
